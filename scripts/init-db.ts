@@ -51,7 +51,23 @@ async function main() {
   // Index d'agrégation pour les séries temporelles.
   await sql`CREATE INDEX IF NOT EXISTS events_type_time_idx ON events (event_type, occurred_at)`;
 
-  console.log("✅ Schéma prêt (table events + index).");
+  // Avis / notes sur la formation (soumissions Tally).
+  await sql`
+    CREATE TABLE IF NOT EXISTS reviews (
+      id            bigserial PRIMARY KEY,
+      submission_id text UNIQUE,
+      respondent_id text,
+      form_name     text,
+      rating        int,          -- note extraite (1..N) si détectable
+      fields        jsonb,        -- [{label, type, value}] toutes les réponses
+      submitted_at  timestamptz,
+      received_at   timestamptz NOT NULL DEFAULT now(),
+      raw           jsonb
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS reviews_submitted_idx ON reviews (submitted_at)`;
+
+  console.log("✅ Schéma prêt (events + reviews + index).");
 }
 
 main().catch((err) => {

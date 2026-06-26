@@ -1,6 +1,7 @@
 import KpiCards from "@/components/KpiCards";
 import EnrollmentChart from "@/components/EnrollmentChart";
 import LessonFunnel from "@/components/LessonFunnel";
+import Reviews from "@/components/Reviews";
 import {
   getKpis,
   getTimeSeries,
@@ -9,6 +10,7 @@ import {
   type SeriesPoint,
   type FunnelStep,
 } from "@/lib/db";
+import { getReviews, type ReviewsSummary } from "@/lib/reviews";
 
 export const dynamic = "force-dynamic";
 
@@ -17,14 +19,16 @@ export default async function Page() {
   let daily: SeriesPoint[] = [];
   let monthly: SeriesPoint[] = [];
   let funnel: FunnelStep[] = [];
+  let reviews: ReviewsSummary | null = null;
   let error: string | null = null;
 
   try {
-    [kpis, daily, monthly, funnel] = await Promise.all([
+    [kpis, daily, monthly, funnel, reviews] = await Promise.all([
       getKpis(),
       getTimeSeries("day"),
       getTimeSeries("month"),
       getLessonFunnel(),
+      getReviews(),
     ]);
   } catch (e) {
     error = e instanceof Error ? e.message : "Erreur inconnue";
@@ -52,6 +56,7 @@ export default async function Page() {
           {kpis && <KpiCards kpis={kpis} />}
           <EnrollmentChart daily={daily} monthly={monthly} />
           <LessonFunnel steps={funnel} />
+          {reviews && <Reviews data={reviews} />}
         </div>
       )}
 
