@@ -4,17 +4,19 @@ export default function LessonFunnel({ steps }: { steps: FunnelStep[] }) {
   const max = steps.reduce((m, s) => Math.max(m, s.members), 0);
 
   return (
-    <div className="rounded-xl bg-card border border-black/5 p-5 shadow-sm">
-      <h2 className="text-base font-semibold text-ink mb-4">
-        Progression par leçon (entonnoir)
-      </h2>
+    // Replié par défaut (<details> sans `open`). Clic sur le titre pour déplier.
+    <details className="group rounded-xl bg-card border border-black/5 p-5 shadow-sm">
+      <summary className="flex items-center justify-between cursor-pointer list-none select-none">
+        <h2 className="text-base font-semibold text-ink">Progression par leçon (entonnoir)</h2>
+        <span className="text-muted text-xs transition-transform group-open:rotate-180">▼</span>
+      </summary>
 
       {steps.length === 0 ? (
         <div className="h-32 flex items-center justify-center text-muted text-sm">
           Aucune leçon complétée pour le moment.
         </div>
       ) : (
-        <ul className="space-y-3">
+        <ul className="space-y-3 mt-4">
           {steps.map((s) => {
             const pct = max ? Math.round((s.members / max) * 100) : 0;
             const label = s.episode != null ? `Épisode ${s.episode}` : s.title;
@@ -39,6 +41,6 @@ export default function LessonFunnel({ steps }: { steps: FunnelStep[] }) {
           })}
         </ul>
       )}
-    </div>
+    </details>
   );
 }

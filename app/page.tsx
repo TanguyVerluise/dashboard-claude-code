@@ -55,8 +55,8 @@ export default async function Page() {
         <div className="space-y-6">
           {kpis && <KpiCards kpis={kpis} />}
           <EnrollmentChart daily={daily} monthly={monthly} />
-          <LessonFunnel steps={funnel} />
           {reviews && <Reviews data={reviews} />}
+          <LessonFunnel steps={funnel} />
         </div>
       )}
 
