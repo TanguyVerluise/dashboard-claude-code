@@ -6,13 +6,22 @@ import { insertEvent } from "@/lib/db";
 export const dynamic = "force-dynamic";
 
 function isAuthorized(req: NextRequest): boolean {
+  // 1) Clé officielle MemberPress : envoyée dans le header `memberpress-webhook-key`
+  //    (MemberPress → Developers → Webhooks). C'est ce que MemberPress utilise.
+  const mpKey = process.env.MEMBERPRESS_WEBHOOK_KEY;
+  if (mpKey && req.headers.get("memberpress-webhook-key") === mpKey) return true;
+
+  // 2) Token manuel pour les tests / autres appels : `?token=` ou header `x-webhook-secret`.
   const secret = process.env.WEBHOOK_SECRET;
-  if (!secret) return false; // pas de secret configuré => refus par sécurité
-  const token =
-    req.nextUrl.searchParams.get("token") ??
-    req.headers.get("x-webhook-secret") ??
-    "";
-  return token === secret;
+  if (secret) {
+    const token =
+      req.nextUrl.searchParams.get("token") ??
+      req.headers.get("x-webhook-secret") ??
+      "";
+    if (token === secret) return true;
+  }
+
+  return false;
 }
 
 export async function POST(req: NextRequest) {

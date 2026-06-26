@@ -23,6 +23,12 @@ MemberPress Courses envoie un webhook (push) à chaque évènement :
 `POST /api/webhook` enregistre chaque évènement (dédup idempotente) dans la table `events`.
 Le dashboard dérive tous les agrégats en SQL — aucune donnée personnelle n'est affichée.
 
+### Authentification du webhook
+
+MemberPress envoie sa **Webhook Key** dans le header `memberpress-webhook-key`
+(MemberPress → Developers → Webhooks). L'endpoint la valide via `MEMBERPRESS_WEBHOOK_KEY`.
+Pour les tests manuels, un `WEBHOOK_SECRET` est aussi accepté (`?token=` ou header `x-webhook-secret`).
+
 ## Démarrage local
 
 ```bash
@@ -44,10 +50,10 @@ curl -X POST "http://localhost:3000/api/webhook?token=$WEBHOOK_SECRET" \
 ## Déploiement (Vercel)
 
 1. `vercel link` puis ajouter l'intégration **Neon** (Marketplace) → fournit `DATABASE_URL`.
-2. `vercel env add WEBHOOK_SECRET` (production + preview).
+2. `vercel env add MEMBERPRESS_WEBHOOK_KEY` (la clé copiée depuis MemberPress) + éventuellement `WEBHOOK_SECRET`.
 3. Déployer, puis `pnpm init-db` une fois contre la base de prod.
-4. Dans MemberPress (**Developer Tools → Webhooks**), pointer l'URL :
-   `https://<app>.vercel.app/api/webhook?token=<WEBHOOK_SECRET>` et activer les évènements course/lesson.
+4. Dans MemberPress (**Developers → Webhooks**), pointer l'URL `https://<app>.vercel.app/api/webhook`
+   (pas besoin de `?token=` : MemberPress envoie sa clé dans le header) et activer les évènements course/lesson.
 
 ## Limite connue
 
