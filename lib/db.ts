@@ -45,55 +45,6 @@ export async function insertEvent(e: ParsedEvent, raw: unknown): Promise<void> {
   `;
 }
 
-export async function getKpis(): Promise<Kpis> {
-  // Identité unifiée : email (webhook) sinon nom (backfill email) sinon id.
-  const rows = (await sql`
-    SELECT
-      count(DISTINCT COALESCE(member_email, member_name, member_id::text))
-        FILTER (WHERE event_type = 'course_started')   AS started,
-      count(DISTINCT COALESCE(member_email, member_name, member_id::text))
-        FILTER (WHERE event_type = 'course_completed') AS completed,
-      count(DISTINCT COALESCE(lesson_id::text, lesson_title))
-        FILTER (WHERE event_type = 'lesson_completed') AS lessons
-    FROM events
-  `) as Record<string, unknown>[];
-
-  const started = Number(rows[0]?.started ?? 0);
-  const completed = Number(rows[0]?.completed ?? 0);
-  return {
-    started,
-    completed,
-    completionRate: started ? completed / started : 0,
-    lessonsTracked: Number(rows[0]?.lessons ?? 0),
-  };
-}
-
-export async function getTimeSeries(granularity: Granularity): Promise<SeriesPoint[]> {
-  const rows = (await sql`
-    SELECT
-      to_char(
-        date_trunc(${granularity}, (occurred_at AT TIME ZONE 'UTC') AT TIME ZONE 'Europe/Paris'),
-        'YYYY-MM-DD'
-      ) AS bucket,
-      count(DISTINCT COALESCE(member_email, member_name, member_id::text))
-        FILTER (WHERE event_type = 'course_started')   AS started,
-      count(DISTINCT COALESCE(member_email, member_name, member_id::text))
-        FILTER (WHERE event_type = 'course_completed') AS completed
-    FROM events
-    WHERE event_type IN ('course_started', 'course_completed')
-    GROUP BY 1
-    ORDER BY 1
-  `) as Record<string, unknown>[];
-
-  const points: SeriesPoint[] = rows.map((r) => ({
-    bucket: String(r.bucket),
-    started: Number(r.started),
-    completed: Number(r.completed),
-  }));
-
-  return fillGaps(points, granularity);
-}
-
 // Liste canonique des leçons, dans l'ordre du funnel. Les épisodes sont matchés
 // par numéro (robuste aux variations de titre), les autres par motif de titre.
 const CANONICAL_LESSONS: {
@@ -123,46 +74,150 @@ const CANONICAL_LESSONS: {
   },
 ];
 
-export async function getLessonFunnel(): Promise<FunnelStep[]> {
+// Index d'« Épisode 10 » dans le funnel : l'atteindre => formation terminée.
+const EP10_INDEX = CANONICAL_LESSONS.findIndex((c) => c.episode === 10);
+
+/** Position d'une leçon (par titre) dans la liste canonique, -1 si inconnue. */
+function lessonIndex(title: string): number {
+  const ep = episodeNumber(title);
+  return CANONICAL_LESSONS.findIndex((c) => c.test(title, ep));
+}
+
+interface UserState {
+  hasStart: boolean;
+  startedAt: string | null;   // 1er course_started (UTC "YYYY-MM-DD HH:MM:SS")
+  maxLessonIdx: number;       // plus haute leçon canonique atteinte (-1 si aucune)
+  completed: boolean;         // formation terminée (réel OU Épisode 10 atteint)
+  completedAt: string | null; // date de complétion (UTC)
+}
+
+function earlier(a: string | null, b: string): string {
+  return a == null || b < a ? b : a;
+}
+
+/**
+ * État dérivé par utilisateur, avec les règles d'inférence :
+ *  - Règle 1 : atteindre Épisode 10 (ou une leçon au-delà) => formation "completed".
+ *  - Règle 2 : compléter une leçon implique toutes les leçons qui la précèdent
+ *    dans le funnel (on ne retient que maxLessonIdx ; le funnel compte ensuite
+ *    les users ayant "au moins atteint" chaque position).
+ */
+async function loadUserStates(): Promise<Map<string, UserState>> {
   const rows = (await sql`
-    SELECT lesson_title, COALESCE(member_email, member_name, member_id::text) AS who
+    SELECT event_type, occurred_at::text AS occurred_at, lesson_title,
+           COALESCE(member_email, member_name, member_id::text) AS who
     FROM events
-    WHERE event_type = 'lesson_completed'
   `) as Record<string, unknown>[];
 
-  // Membres distincts par leçon canonique (toutes affichées, même à 0).
-  const members: Set<string>[] = CANONICAL_LESSONS.map(() => new Set<string>());
-  const extra = new Map<string, { title: string; episode: number | null; members: Set<string> }>();
+  type Acc = {
+    hasStart: boolean;
+    startedAt: string | null;
+    maxLessonIdx: number;
+    realCompletedAt: string | null;
+    reachedEndAt: string | null; // 1re complétion d'une leçon d'index >= EP10_INDEX
+  };
+  const acc = new Map<string, Acc>();
+  const get = (who: string): Acc => {
+    let a = acc.get(who);
+    if (!a) {
+      a = { hasStart: false, startedAt: null, maxLessonIdx: -1, realCompletedAt: null, reachedEndAt: null };
+      acc.set(who, a);
+    }
+    return a;
+  };
 
   for (const r of rows) {
-    const title = (r.lesson_title as string) ?? "Leçon";
-    const ep = episodeNumber(title);
-    const who = r.who == null ? null : String(r.who);
-    const idx = CANONICAL_LESSONS.findIndex((c) => c.test(title, ep));
-    if (idx >= 0) {
-      if (who) members[idx].add(who);
-    } else {
-      // Leçon hors liste canonique : conservée et affichée en fin de funnel.
-      const key = ep != null ? `ep:${ep}` : `t:${title}`;
-      let g = extra.get(key);
-      if (!g) {
-        g = { title, episode: ep, members: new Set<string>() };
-        extra.set(key, g);
+    if (r.who == null) continue;
+    const who = String(r.who);
+    const at = String(r.occurred_at);
+    const a = get(who);
+    if (r.event_type === "course_started") {
+      a.hasStart = true;
+      a.startedAt = earlier(a.startedAt, at);
+    } else if (r.event_type === "course_completed") {
+      a.realCompletedAt = earlier(a.realCompletedAt, at);
+    } else if (r.event_type === "lesson_completed") {
+      const idx = lessonIndex((r.lesson_title as string) ?? "");
+      if (idx >= 0) {
+        if (idx > a.maxLessonIdx) a.maxLessonIdx = idx;
+        if (EP10_INDEX >= 0 && idx >= EP10_INDEX) a.reachedEndAt = earlier(a.reachedEndAt, at);
       }
-      if (who) g.members.add(who);
     }
   }
 
-  const steps: FunnelStep[] = CANONICAL_LESSONS.map((c, i) => ({
+  const out = new Map<string, UserState>();
+  for (const [who, a] of acc) {
+    const completed = a.realCompletedAt != null || a.reachedEndAt != null;
+    const completedAt = completed
+      ? [a.realCompletedAt, a.reachedEndAt].filter((x): x is string => x != null).sort()[0]
+      : null;
+    out.set(who, {
+      hasStart: a.hasStart,
+      startedAt: a.startedAt,
+      maxLessonIdx: a.maxLessonIdx,
+      completed,
+      completedAt,
+    });
+  }
+  return out;
+}
+
+/** "YYYY-MM-DD HH:MM:SS" (UTC) -> bucket en Europe/Paris ('YYYY-MM-DD' jour ou 1er du mois). */
+function parisBucket(utc: string, g: Granularity): string {
+  const d = new Date(utc.replace(" ", "T") + "Z");
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Paris",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(d);
+  const p: Record<string, string> = {};
+  for (const x of parts) p[x.type] = x.value;
+  return g === "day" ? `${p.year}-${p.month}-${p.day}` : `${p.year}-${p.month}-01`;
+}
+
+export async function getKpis(): Promise<Kpis> {
+  const states = [...(await loadUserStates()).values()];
+  const started = states.filter((s) => s.hasStart).length;
+  const completed = states.filter((s) => s.completed).length;
+  // Règle 2 : toute leçon d'index <= maxReached a au moins une complétion.
+  const maxReached = states.reduce((m, s) => Math.max(m, s.maxLessonIdx), -1);
+  return {
+    started,
+    completed,
+    completionRate: started ? completed / started : 0,
+    lessonsTracked: maxReached + 1,
+  };
+}
+
+export async function getTimeSeries(granularity: Granularity): Promise<SeriesPoint[]> {
+  const states = [...(await loadUserStates()).values()];
+  const map = new Map<string, SeriesPoint>();
+  const bump = (bucket: string, key: "started" | "completed") => {
+    let p = map.get(bucket);
+    if (!p) {
+      p = { bucket, started: 0, completed: 0 };
+      map.set(bucket, p);
+    }
+    p[key]++;
+  };
+  for (const s of states) {
+    if (s.hasStart && s.startedAt) bump(parisBucket(s.startedAt, granularity), "started");
+    if (s.completed && s.completedAt) bump(parisBucket(s.completedAt, granularity), "completed");
+  }
+  const points = [...map.values()].sort((a, b) => a.bucket.localeCompare(b.bucket));
+  return fillGaps(points, granularity);
+}
+
+export async function getLessonFunnel(): Promise<FunnelStep[]> {
+  const states = [...(await loadUserStates()).values()];
+  // Règle 2 : un user ayant atteint l'index i compte pour toutes les leçons <= i.
+  return CANONICAL_LESSONS.map((c, i) => ({
     lessonId: null,
     title: c.label,
     episode: c.episode,
-    members: members[i].size,
+    members: states.filter((s) => s.maxLessonIdx >= i).length,
   }));
-  for (const g of extra.values()) {
-    steps.push({ lessonId: null, title: g.title, episode: g.episode, members: g.members.size });
-  }
-  return steps;
 }
 
 /** Comble les buckets manquants entre le premier et le dernier point (séries continues). */
