@@ -46,11 +46,15 @@ export async function insertEvent(e: ParsedEvent, raw: unknown): Promise<void> {
 }
 
 export async function getKpis(): Promise<Kpis> {
+  // Identité unifiée : email (webhook) sinon nom (backfill email) sinon id.
   const rows = (await sql`
     SELECT
-      count(DISTINCT member_id) FILTER (WHERE event_type = 'course_started')   AS started,
-      count(DISTINCT member_id) FILTER (WHERE event_type = 'course_completed') AS completed,
-      count(DISTINCT lesson_id) FILTER (WHERE event_type = 'lesson_completed') AS lessons
+      count(DISTINCT COALESCE(member_email, member_name, member_id::text))
+        FILTER (WHERE event_type = 'course_started')   AS started,
+      count(DISTINCT COALESCE(member_email, member_name, member_id::text))
+        FILTER (WHERE event_type = 'course_completed') AS completed,
+      count(DISTINCT COALESCE(lesson_id::text, lesson_title))
+        FILTER (WHERE event_type = 'lesson_completed') AS lessons
     FROM events
   `) as Record<string, unknown>[];
 
@@ -67,9 +71,14 @@ export async function getKpis(): Promise<Kpis> {
 export async function getTimeSeries(granularity: Granularity): Promise<SeriesPoint[]> {
   const rows = (await sql`
     SELECT
-      to_char(date_trunc(${granularity}, occurred_at), 'YYYY-MM-DD') AS bucket,
-      count(DISTINCT member_id) FILTER (WHERE event_type = 'course_started')   AS started,
-      count(DISTINCT member_id) FILTER (WHERE event_type = 'course_completed') AS completed
+      to_char(
+        date_trunc(${granularity}, (occurred_at AT TIME ZONE 'UTC') AT TIME ZONE 'Europe/Paris'),
+        'YYYY-MM-DD'
+      ) AS bucket,
+      count(DISTINCT COALESCE(member_email, member_name, member_id::text))
+        FILTER (WHERE event_type = 'course_started')   AS started,
+      count(DISTINCT COALESCE(member_email, member_name, member_id::text))
+        FILTER (WHERE event_type = 'course_completed') AS completed
     FROM events
     WHERE event_type IN ('course_started', 'course_completed')
     GROUP BY 1
@@ -86,30 +95,52 @@ export async function getTimeSeries(granularity: Granularity): Promise<SeriesPoi
 }
 
 export async function getLessonFunnel(): Promise<FunnelStep[]> {
-  // Regroupé par lesson_id (clé stable) ; le titre peut varier légèrement d'un
-  // évènement à l'autre, on retient donc le plus fréquent via mode().
+  // On agrège en JS pour unifier webhook (lesson_id) et backfill (lesson_title)
+  // sur une clé stable commune : le numéro d'épisode (sinon le titre).
   const rows = (await sql`
     SELECT
       lesson_id,
-      mode() WITHIN GROUP (ORDER BY lesson_title) AS lesson_title,
-      count(DISTINCT member_id) AS members
+      lesson_title,
+      COALESCE(member_email, member_name, member_id::text) AS who
     FROM events
     WHERE event_type = 'lesson_completed'
-    GROUP BY lesson_id
   `) as Record<string, unknown>[];
 
-  const steps: FunnelStep[] = rows.map((r) => ({
-    lessonId: r.lesson_id == null ? null : Number(r.lesson_id),
-    title: (r.lesson_title as string) ?? "Leçon",
-    episode: episodeNumber((r.lesson_title as string) ?? null),
-    members: Number(r.members),
+  const groups = new Map<
+    string,
+    { lessonId: number | null; title: string; episode: number | null; members: Set<string> }
+  >();
+
+  for (const r of rows) {
+    const title = (r.lesson_title as string) ?? "Leçon";
+    const ep = episodeNumber(title);
+    const key = ep != null ? `ep:${ep}` : `t:${title}`;
+    let g = groups.get(key);
+    if (!g) {
+      g = {
+        lessonId: r.lesson_id == null ? null : Number(r.lesson_id),
+        title,
+        episode: ep,
+        members: new Set<string>(),
+      };
+      groups.set(key, g);
+    }
+    if (g.lessonId == null && r.lesson_id != null) g.lessonId = Number(r.lesson_id);
+    if (r.who != null) g.members.add(String(r.who));
+  }
+
+  const steps: FunnelStep[] = [...groups.values()].map((g) => ({
+    lessonId: g.lessonId,
+    title: g.title,
+    episode: g.episode,
+    members: g.members.size,
   }));
 
   steps.sort((a, b) => {
     if (a.episode != null && b.episode != null) return a.episode - b.episode;
     if (a.episode != null) return -1;
     if (b.episode != null) return 1;
-    return (a.lessonId ?? 0) - (b.lessonId ?? 0);
+    return a.title.localeCompare(b.title);
   });
 
   return steps;

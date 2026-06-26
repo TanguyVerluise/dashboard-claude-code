@@ -28,8 +28,18 @@ async function main() {
       lesson_title  text,
       occurred_at   timestamp   NOT NULL,
       received_at   timestamptz NOT NULL DEFAULT now(),
-      raw           jsonb
+      raw           jsonb,
+      source_key    text
     )
+  `;
+
+  // Pour les tables déjà créées : ajoute la colonne d'idempotence du backfill.
+  await sql`ALTER TABLE events ADD COLUMN IF NOT EXISTS source_key text`;
+
+  // Idempotence du backfill (1 ligne par message source, ex: Gmail message id).
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS events_source_key_idx
+    ON events (source_key) WHERE source_key IS NOT NULL
   `;
 
   // Idempotence : un même évènement renvoyé deux fois ne crée qu'une ligne.
