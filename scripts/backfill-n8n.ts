@@ -60,13 +60,8 @@ async function fetchAll(): Promise<unknown[]> {
   return out;
 }
 
-function toRow(e: any): Row | null {
-  let g: any;
-  try {
-    g = e.data.resultData.runData["Gmail Trigger"][0].data.main[0][0].json;
-  } catch {
-    return null;
-  }
+function itemToRow(g: any): Row | null {
+  if (!g) return null;
   const subject: string = (g.Subject ?? "").trim();
   const snippet: string = g.snippet ?? "";
   const ms = Number(g.internalDate || 0);
@@ -114,8 +109,27 @@ function toRow(e: any): Row | null {
 
 async function main() {
   const execs = await fetchAll();
-  const rows = execs.map(toRow).filter((r): r is Row => r !== null);
-  console.log(`executions: ${execs.length} | events parsables: ${rows.length}`);
+
+  // Une exécution peut contenir PLUSIEURS emails (Gmail Trigger en mode batch) :
+  // on parcourt tous les items, pas seulement le premier. Dédup par message id.
+  const rows: Row[] = [];
+  const seen = new Set<string>();
+  for (const e of execs as any[]) {
+    let items: any[] = [];
+    try {
+      items = e.data.resultData.runData["Gmail Trigger"][0].data.main[0] ?? [];
+    } catch {
+      items = [];
+    }
+    for (const it of items) {
+      const r = itemToRow(it?.json);
+      if (r && !seen.has(r.source_key)) {
+        seen.add(r.source_key);
+        rows.push(r);
+      }
+    }
+  }
+  console.log(`executions: ${execs.length} | emails distincts: ${rows.length}`);
 
   let inserted = 0;
   for (const r of rows) {

@@ -94,55 +94,74 @@ export async function getTimeSeries(granularity: Granularity): Promise<SeriesPoi
   return fillGaps(points, granularity);
 }
 
+// Liste canonique des leçons, dans l'ordre du funnel. Les épisodes sont matchés
+// par numéro (robuste aux variations de titre), les autres par motif de titre.
+const CANONICAL_LESSONS: {
+  label: string;
+  episode: number | null;
+  test: (title: string, ep: number | null) => boolean;
+}[] = [
+  {
+    label: "Ce que tu vas apprendre dans cette formation",
+    episode: null,
+    test: (t) => /ce que tu vas apprendre/i.test(t),
+  },
+  ...Array.from({ length: 10 }, (_, i) => ({
+    label: `Épisode ${i + 1}`,
+    episode: i + 1,
+    test: (_t: string, ep: number | null) => ep === i + 1,
+  })),
+  {
+    label: "Ton avis sur cette formation Claude Code",
+    episode: null,
+    test: (t) => /ton avis/i.test(t),
+  },
+  {
+    label: "Formation Claude Code - niveau avancé",
+    episode: null,
+    test: (t) => /niveau avanc/i.test(t),
+  },
+];
+
 export async function getLessonFunnel(): Promise<FunnelStep[]> {
-  // On agrège en JS pour unifier webhook (lesson_id) et backfill (lesson_title)
-  // sur une clé stable commune : le numéro d'épisode (sinon le titre).
   const rows = (await sql`
-    SELECT
-      lesson_id,
-      lesson_title,
-      COALESCE(member_email, member_name, member_id::text) AS who
+    SELECT lesson_title, COALESCE(member_email, member_name, member_id::text) AS who
     FROM events
     WHERE event_type = 'lesson_completed'
   `) as Record<string, unknown>[];
 
-  const groups = new Map<
-    string,
-    { lessonId: number | null; title: string; episode: number | null; members: Set<string> }
-  >();
+  // Membres distincts par leçon canonique (toutes affichées, même à 0).
+  const members: Set<string>[] = CANONICAL_LESSONS.map(() => new Set<string>());
+  const extra = new Map<string, { title: string; episode: number | null; members: Set<string> }>();
 
   for (const r of rows) {
     const title = (r.lesson_title as string) ?? "Leçon";
     const ep = episodeNumber(title);
-    const key = ep != null ? `ep:${ep}` : `t:${title}`;
-    let g = groups.get(key);
-    if (!g) {
-      g = {
-        lessonId: r.lesson_id == null ? null : Number(r.lesson_id),
-        title,
-        episode: ep,
-        members: new Set<string>(),
-      };
-      groups.set(key, g);
+    const who = r.who == null ? null : String(r.who);
+    const idx = CANONICAL_LESSONS.findIndex((c) => c.test(title, ep));
+    if (idx >= 0) {
+      if (who) members[idx].add(who);
+    } else {
+      // Leçon hors liste canonique : conservée et affichée en fin de funnel.
+      const key = ep != null ? `ep:${ep}` : `t:${title}`;
+      let g = extra.get(key);
+      if (!g) {
+        g = { title, episode: ep, members: new Set<string>() };
+        extra.set(key, g);
+      }
+      if (who) g.members.add(who);
     }
-    if (g.lessonId == null && r.lesson_id != null) g.lessonId = Number(r.lesson_id);
-    if (r.who != null) g.members.add(String(r.who));
   }
 
-  const steps: FunnelStep[] = [...groups.values()].map((g) => ({
-    lessonId: g.lessonId,
-    title: g.title,
-    episode: g.episode,
-    members: g.members.size,
+  const steps: FunnelStep[] = CANONICAL_LESSONS.map((c, i) => ({
+    lessonId: null,
+    title: c.label,
+    episode: c.episode,
+    members: members[i].size,
   }));
-
-  steps.sort((a, b) => {
-    if (a.episode != null && b.episode != null) return a.episode - b.episode;
-    if (a.episode != null) return -1;
-    if (b.episode != null) return 1;
-    return a.title.localeCompare(b.title);
-  });
-
+  for (const g of extra.values()) {
+    steps.push({ lessonId: null, title: g.title, episode: g.episode, members: g.members.size });
+  }
   return steps;
 }
 
