@@ -19,8 +19,9 @@ export interface FunnelStep {
 export interface Kpis {
   started: number;
   completed: number;
-  completionRate: number; // 0..1
-  lessonsTracked: number;
+  completionRate: number;  // leçons suivies / (inscrits × nb de leçons), 0..1
+  lessonsFollowed: number; // volume total de leçons suivies (règle de progression incluse)
+  numLessons: number;      // nb de leçons du parcours (dénominateur du taux)
 }
 
 /** Insertion idempotente d'un évènement (dédup via index unique côté DB). */
@@ -172,13 +173,24 @@ export async function getKpis(): Promise<Kpis> {
   const states = [...(await loadUserStates()).values()];
   const started = states.filter((s) => s.hasStart).length;
   const completed = states.filter((s) => s.completed).length;
-  // Règle 2 : toute leçon d'index <= maxReached a au moins une complétion.
-  const maxReached = states.reduce((m, s) => Math.max(m, s.maxLessonIdx), -1);
+  const numLessons = CANONICAL_LESSONS.length;
+
+  // Volume total de leçons suivies : par user, toutes les leçons jusqu'à la plus
+  // avancée atteinte (règle 2). Somme sur tous les utilisateurs.
+  const lessonsFollowed = states.reduce(
+    (sum, s) => sum + (s.maxLessonIdx >= 0 ? s.maxLessonIdx + 1 : 0),
+    0,
+  );
+
+  // Taux = leçons suivies / (inscrits × nb de leçons si tous vont au bout).
+  const possible = started * numLessons;
+
   return {
     started,
     completed,
-    completionRate: started ? completed / started : 0,
-    lessonsTracked: maxReached + 1,
+    completionRate: possible ? lessonsFollowed / possible : 0,
+    lessonsFollowed,
+    numLessons,
   };
 }
 

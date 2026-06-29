@@ -16,8 +16,16 @@ export default function KpiCards({ kpis }: { kpis: Kpis }) {
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
       <Card label="Inscrits (cours démarré)" value={kpis.started.toLocaleString("fr-FR")} />
       <Card label="Formation terminée" value={kpis.completed.toLocaleString("fr-FR")} />
-      <Card label="Taux de complétion" value={`${rate}%`} hint={`${kpis.completed} / ${kpis.started}`} />
-      <Card label="Leçons suivies" value={kpis.lessonsTracked.toLocaleString("fr-FR")} hint="leçons distinctes complétées" />
+      <Card
+        label="Taux de complétion"
+        value={`${rate}%`}
+        hint={`${kpis.lessonsFollowed.toLocaleString("fr-FR")} / ${(kpis.started * kpis.numLessons).toLocaleString("fr-FR")} leçons`}
+      />
+      <Card
+        label="Leçons suivies"
+        value={kpis.lessonsFollowed.toLocaleString("fr-FR")}
+        hint="volume total de leçons suivies"
+      />
     </div>
   );
 }
