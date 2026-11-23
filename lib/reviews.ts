@@ -5,6 +5,9 @@ import { sql } from "./sql";
 // Pour les choix (MULTIPLE_CHOICE/CHECKBOXES/DROPDOWN), value = ids d'options
 // qu'on résout en texte via le tableau options.
 
+// Tally id of the Claude Code review form. Unlike its name, it survives a rename.
+const CLAUDE_CODE_FORM_ID = "eqpD9x";
+
 export interface ResolvedField {
   label: string;
   type: string;
@@ -98,6 +101,7 @@ export async function getReviews(): Promise<ReviewsSummary> {
   const rows = (await sql`
     SELECT rating, fields, submitted_at::text AS submitted_at
     FROM reviews
+    WHERE raw->'data'->>'formId' = ${CLAUDE_CODE_FORM_ID}
     ORDER BY submitted_at DESC NULLS LAST
     LIMIT 200
   `) as Record<string, unknown>[];
