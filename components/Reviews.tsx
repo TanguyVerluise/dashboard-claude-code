@@ -95,7 +95,15 @@ function usePerPage(ref: React.RefObject<HTMLDivElement | null>): number {
   return perPage;
 }
 
-export default function Reviews({ data }: { data: ReviewsSummary }) {
+export default function Reviews({
+  data,
+  title = "Avis sur la formation",
+  emptyMessage = "Aucun avis pour le moment — ils apparaîtront ici dès la première réponse au formulaire.",
+}: {
+  data: ReviewsSummary;
+  title?: string;
+  emptyMessage?: string;
+}) {
   const { count, avgRating, maxRating } = data;
 
   // Le plus récent en premier.
@@ -117,7 +125,7 @@ export default function Reviews({ data }: { data: ReviewsSummary }) {
   return (
     <div ref={rootRef} className="rounded-xl bg-card border border-black/5 p-5 shadow-sm">
       <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
-        <h2 className="text-base font-semibold text-ink">Avis sur la formation</h2>
+        <h2 className="text-base font-semibold text-ink">{title}</h2>
         {count > 0 && avgRating != null && (
           <div className="flex items-center gap-2 text-sm">
             <Stars value={Math.round(avgRating)} max={maxRating} />
@@ -131,7 +139,7 @@ export default function Reviews({ data }: { data: ReviewsSummary }) {
 
       {count === 0 || visible.length === 0 ? (
         <div className="h-24 flex items-center justify-center text-muted text-sm">
-          Aucun avis pour le moment — ils apparaîtront ici dès la première réponse au formulaire.
+          {emptyMessage}
         </div>
       ) : (
         <div>
