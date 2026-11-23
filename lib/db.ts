@@ -38,6 +38,12 @@ export async function insertEvent(e: ParsedEvent, raw: unknown): Promise<void> {
   `;
 }
 
+// The events table receives every MemberPress course. This dashboard only counts
+// Claude Code. Events from 23 to 26 June 2026 were imported without a course_id:
+// their title is the only thing that ties them to this course.
+const CLAUDE_CODE_COURSE_ID = 150428;
+const CLAUDE_CODE_LEGACY_TITLE = "Claude Code pour les équipes Produit";
+
 // Liste canonique des leçons, dans l'ordre du funnel. Les épisodes sont matchés
 // par numéro (robuste aux variations de titre), les autres par motif de titre.
 const CANONICAL_LESSONS: {
@@ -100,6 +106,8 @@ async function loadUserStates(): Promise<Map<string, UserState>> {
     SELECT event_type, occurred_at::text AS occurred_at, lesson_title,
            COALESCE(member_email, member_name, member_id::text) AS who
     FROM events
+    WHERE course_id = ${CLAUDE_CODE_COURSE_ID}
+       OR (course_id IS NULL AND course_title = ${CLAUDE_CODE_LEGACY_TITLE})
   `) as Record<string, unknown>[];
 
   type Acc = {
