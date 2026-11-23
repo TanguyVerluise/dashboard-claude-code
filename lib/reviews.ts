@@ -68,6 +68,21 @@ function extractRating(fields: ResolvedField[]): number | null {
   return null;
 }
 
+const EMAIL_PATTERN = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
+
+function maskContact(value: ResolvedField["value"]): ResolvedField["value"] {
+  if (typeof value === "string") return value.replace(EMAIL_PATTERN, "[masqué]");
+  if (Array.isArray(value)) return value.map((item) => item.replace(EMAIL_PATTERN, "[masqué]"));
+  return value;
+}
+
+/** Keeps only what the public page may show: no contact field reaches the browser. */
+function toPublicFields(fields: ResolvedField[]): ResolvedField[] {
+  return fields
+    .filter((field) => field.type !== "INPUT_EMAIL" && !/e-?mail/i.test(field.label))
+    .map((field) => ({ ...field, value: maskContact(field.value) }));
+}
+
 export function parseTally(payload: unknown): ParsedReview | null {
   const root = payload as Record<string, unknown> | null;
   const d = root?.data as Record<string, unknown> | undefined;
@@ -104,7 +119,7 @@ export async function getReviews(): Promise<ReviewsSummary> {
 
   const reviews: Review[] = rows.map((r) => ({
     rating: r.rating == null ? null : Number(r.rating),
-    fields: (r.fields as ResolvedField[]) ?? [],
+    fields: toPublicFields((r.fields as ResolvedField[]) ?? []),
     submittedAt: (r.submitted_at as string) ?? null,
   }));
 
